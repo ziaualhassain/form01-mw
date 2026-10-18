@@ -1,0 +1,393 @@
+# FORM/01 Unified Middleware
+
+FastAPI-based commerce middleware for the FORM/01 storefront and admin UI.
+
+## What is included
+
+- Shared API for customer and admin clients
+- PostgreSQL-backed SQLAlchemy models
+- JWT authentication scaffold
+- Public catalogue, cart, checkout, and admin product routes
+- Aiven-friendly configuration via environment variables
+- Alembic migration entrypoint
+
+## Environment
+
+The service expects a PostgreSQL connection from one of these sources:
+
+- `DATABASE_URL`
+- `AIVEN_DATABASE_URL`
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_SSLMODE`
+
+Recommended app variables:
+
+- `APP_NAME`
+- `ENVIRONMENT`
+- `SECRET_KEY`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `CORS_ORIGINS`
+- `PASSWORD_HASH_SCHEME`
+- `RAZORPAY_KEY_ID`
+- `RAZORPAY_KEY_SECRET`
+- `RAZORPAY_WEBHOOK_SECRET`
+
+## Run locally
+
+1. Create and activate a Python virtual environment.
+2. Install dependencies from `pyproject.toml`.
+3. Set environment variables.
+4. Run the API with Uvicorn.
+
+## Commands
+
+### Install dependencies
+
+```bash
+python -m pip install -e .
+```
+
+### Start the API
+
+```bash
+uvicorn app.main:app --reload
+```
+
+### Run database migrations
+
+```bash
+alembic upgrade head
+```
+
+### Create a new migration
+
+```bash
+alembic revision --autogenerate -m "describe change"
+```
+
+### Run tests
+
+```bash
+pytest
+```
+
+### Format and lint checks
+
+If you add formatting or linting tools later, document them here so both UIs and the middleware follow the same workflow.
+
+## API endpoints
+
+All frontend clients should use the versioned API under `/api/v1`. Public endpoints are available without a bearer token, while customer and admin endpoints require authentication.
+
+### Public endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/products` | List public products |
+| `GET` | `/api/v1/products/{slug}` | Get product detail by slug |
+| `GET` | `/api/v1/storefront/config` | Get public storefront config |
+
+### Authentication endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/auth/register` | Register a customer account |
+| `POST` | `/api/v1/auth/login` | Log in and receive a bearer token |
+| `GET` | `/api/v1/auth/me` | Get authenticated user context |
+
+### Customer endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/me/profile` | Get current customer profile |
+| `PATCH` | `/api/v1/me/profile` | Update current customer profile |
+| `GET` | `/api/v1/me/addresses` | List saved addresses |
+| `POST` | `/api/v1/me/addresses` | Create a saved address |
+| `DELETE` | `/api/v1/me/addresses/{address_id}` | Delete a saved address |
+| `GET` | `/api/v1/me/orders` | List customer orders |
+| `GET` | `/api/v1/me/orders/{order_number}` | Get customer order detail |
+| `POST` | `/api/v1/me/orders/{order_number}/cancel-request` | Request order cancellation |
+| `GET` | `/api/v1/cart` | Get the active cart |
+| `POST` | `/api/v1/cart/items` | Add or update a cart item |
+| `POST` | `/api/v1/checkout/quote` | Calculate checkout totals |
+| `POST` | `/api/v1/checkout` | Create an order from the cart and initialize a payment provider order |
+| `POST` | `/api/v1/payments/razorpay/verify` | Verify a successful Razorpay payment from the client |
+
+Catalogue variants expose `on_hand`, `reserved`, and `available`. Cart and checkout quote items expose `available_quantity`. The storefront should disable quantities above `available`; checkout still performs the authoritative row-locked stock check because availability can change between display and purchase.
+
+### Admin endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/admin/products` | List admin products |
+| `POST` | `/api/v1/admin/products` | Create a product |
+| `POST` | `/api/v1/admin/products/{product_id}/publish` | Publish a product |
+| `GET` | `/api/v1/admin/orders` | List all orders |
+| `GET` | `/api/v1/admin/orders/{order_number}` | Get an order by order number |
+| `POST` | `/api/v1/admin/orders/{order_number}/shipments` | Create a shipment |
+| `POST` | `/api/v1/admin/payments/{payment_id}/refund` | Create a refund |
+| `POST` | `/api/v1/admin/inventory/adjust` | Add or remove stock for a variant |
+
+### Webhook endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/webhooks/{provider}` | Receive provider webhook events |
+
+### Auth rules
+
+- Customer routes require a valid `Authorization: Bearer <token>` header.
+- Admin routes require a valid token and an `ADMIN` or `OWNER` role.
+- Public routes do not require authentication.
+
+### Getting an admin bearer token
+
+New registrations receive `CUSTOMER` access. Promote an existing account before using the admin UI:
+
+```bash
+cd /Users/ziasmacm2/Documents/Work-Space/form01-mw
+source .venv/bin/activate
+python scripts/promote_admin.py your-email@example.com ADMIN
+```
+
+Then log in through `POST /api/v1/auth/login` with the account email and password. The response contains `access_token`; send it to protected routes as:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+### Response shape
+
+- Successful APIs generally return data in a `data` envelope when the endpoint uses the shared contract.
+- Errors use a consistent `error` envelope with a code, message, details, and request ID.
+
+## Frontend Razorpay Checkout
+
+The checkout endpoint creates the internal order and Razorpay order. The response includes `provider_order_id` and the public `provider_key_id`; only the key ID may be used in browser code. Never expose `RAZORPAY_KEY_SECRET` or `RAZORPAY_WEBHOOK_SECRET` to the frontend.
+
+Load Razorpay Checkout once in the storefront HTML or app layout:
+
+```html
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+```
+
+Example browser flow:
+
+```javascript
+async function startRazorpayCheckout(token) {
+	const checkoutResponse = await fetch("http://localhost:8000/api/v1/checkout", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${token}`,
+		},
+		body: JSON.stringify({
+			payment_provider: "razorpay",
+			idempotency_key: crypto.randomUUID(),
+		}),
+	});
+
+	if (!checkoutResponse.ok) {
+		throw new Error("Unable to create checkout");
+	}
+
+	const checkout = await checkoutResponse.json();
+	const options = {
+		key: checkout.provider_key_id,
+		amount: checkout.total_minor,
+		currency: "INR",
+		name: "FORM/01",
+		order_id: checkout.provider_order_id,
+		handler: async function (response) {
+			const verificationResponse = await fetch("http://localhost:8000/api/v1/payments/razorpay/verify", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${token}`,
+				},
+				body: JSON.stringify({
+					razorpay_order_id: response.razorpay_order_id,
+					razorpay_payment_id: response.razorpay_payment_id,
+					razorpay_signature: response.razorpay_signature,
+				}),
+			});
+
+			if (!verificationResponse.ok) {
+				throw new Error("Payment verification failed");
+			}
+
+			window.location.assign(`/orders/${checkout.order_number}`);
+		},
+		modal: {
+			ondismiss: function () {
+				console.info("Razorpay checkout dismissed");
+			},
+		},
+	};
+
+	const razorpay = new window.Razorpay(options);
+	razorpay.open();
+}
+```
+
+The frontend success callback is only a user-facing confirmation path. Razorpay webhooks remain the authoritative retry-safe payment update path, so configure the webhook URL as:
+
+```text
+https://your-api.example.com/api/v1/webhooks/razorpay
+```
+
+## Customer and admin workflow flows
+
+These flows show how endpoints chain together to produce a transaction or state change. They also highlight areas that still need to be completed for a full production system.
+
+### Customer flow: sign up, browse, cart, checkout, order
+
+| Step | Endpoint | What happens | Transaction boundary | Gaps to close |
+| --- | --- | --- | --- | --- |
+| 1 | `POST /api/v1/auth/register` | Creates the customer user and profile | Single DB transaction | Email verification flow is not yet implemented |
+| 2 | `POST /api/v1/auth/login` | Returns bearer token | Read-only auth check | Refresh tokens and session revocation are not yet implemented |
+| 3 | `GET /api/v1/products` / `GET /api/v1/products/{slug}` | Loads public catalogue | No write transaction | Product search, filters, and stock display still need expansion |
+| 4 | `GET /api/v1/cart` | Loads active cart | No write transaction | Guest cart support and merge logic are not yet implemented |
+| 5 | `POST /api/v1/cart/items` | Adds or updates cart line | Single write transaction | Inventory validation and pricing snapshots are not yet enforced |
+| 6 | `POST /api/v1/checkout/quote` | Calculates totals from current cart data | Read-only calculation | Shipping, tax, coupon, and promotion logic are not yet wired in |
+| 7 | `POST /api/v1/checkout` | Locks available stock, creates the order, order items, and a Razorpay order | Single transaction for reservation and order creation | Reservation expiry for abandoned checkouts is still needed |
+| 8 | `POST /api/v1/payments/razorpay/verify` | Verifies the signature, provider order, amount, currency, and payment state | Separate payment confirmation transaction | No known partial gap in the implemented Razorpay verification path |
+| 9 | `POST /api/v1/webhooks/{provider}` | Verifies, deduplicates, validates, and processes payment events | Separate payment transaction | Additional provider event types can be added as needed |
+
+### Admin flow: create product, publish, manage fulfilment
+
+| Step | Endpoint | What happens | Transaction boundary | Gaps to close |
+| --- | --- | --- | --- | --- |
+| 1 | `POST /api/v1/auth/login` | Admin signs in and gets bearer token | Read-only auth check | Admin seeding and role assignment are not yet included |
+| 2 | `POST /api/v1/admin/products` | Creates a draft product | Single write transaction | Variants, media, categories, and validation are not yet implemented |
+| 3 | `POST /api/v1/admin/products/{product_id}/publish` | Marks product as active | Single write transaction | Publish rules, audit history, and completeness checks are not yet implemented |
+| 4 | `GET /api/v1/admin/products` | Lists admin catalogue | No write transaction | Admin product detail/edit/archive endpoints are missing |
+| 5 | `GET /api/v1/admin/orders` | Views placed orders | No write transaction | Admin order endpoints and fulfilment actions are not yet implemented |
+| 6 | `POST /api/v1/admin/orders/{order_number}/shipments` | Creates shipment records | Single write transaction | Shipment endpoints and tracking integration are missing |
+| 7 | `POST /api/v1/admin/payments/{payment_id}/refund` | Creates refund record | Separate refund transaction | Refund provider integration and reconciliation are not yet implemented |
+
+### Transaction chain summary
+
+| Chain | Endpoint sequence | Expected atomic part |
+| --- | --- | --- |
+| Customer order placement | `auth/register` -> `auth/login` -> `cart/items` -> `checkout/quote` -> `checkout` | `checkout` must atomically create order, items, addresses, and payment intent record |
+| Payment confirmation | `webhooks/{provider}` -> payment state update | Webhook processing must be idempotent and safe to retry |
+| Admin product launch | `admin/products` -> `admin/products/{id}/publish` | Product creation and publish should each be transactional and auditable |
+| Fulfilment | `admin/orders` -> `admin/orders/{order_number}/shipments` | Shipment creation and order status update must be transactional |
+
+### Current gaps in the codebase
+
+- Checkout now creates an order and a Razorpay order when Razorpay credentials are configured.
+- Razorpay payment verification validates the signature, provider order, charged amount, currency, and payment status; repeated successful verification is idempotent.
+- Webhooks verify Razorpay signatures, validate payment totals, deduplicate events, record processing timestamps, and update payment/order state.
+- Inventory levels, row-locked checkout reservations, payment-success consumption, payment-failure release, and admin stock adjustments are implemented.
+- Reservation expiry for abandoned unpaid checkouts and scheduled cleanup are still needed.
+- Razorpay refunds now call the provider API and persist the provider refund ID after local eligibility validation.
+- Guest checkout, guest cart merge, and order recovery flows are still not built.
+- Audit logging is defined in the model but not wired into every sensitive mutation.
+- Role assignment for staff/admin users is still not seeded or managed through an admin UI.
+- Product variants, inventory, shipping rates, tax, coupons, returns, and carrier tracking still need full business-rule coverage.
+
+These gaps are useful checkpoints for the next implementation phase.
+
+## Next steps
+
+- Add Alembic migrations for the initial schema
+- Add reservation expiry and scheduled cleanup for abandoned checkouts
+- Add carrier tracking integration once a shipping provider is selected
+- Expand inventory, order fulfilment, returns, and reporting workflows
+- Connect the two UIs to the versioned `/api/v1` routes
+
+## Database tables and relations
+
+### Core identity and access
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `users` | Shared identity record for customers and staff | Parent of `customer_profiles`, `addresses`, `carts`, `orders`, `audit_logs` |
+| `roles` | Role definitions such as `CUSTOMER`, `ADMIN`, `OWNER` | Linked to `users` through `user_roles` |
+| `user_roles` | Join table between users and roles | `user_id` -> `users.id`, `role_id` -> `roles.id` |
+| `customer_profiles` | Customer-only profile data | `user_id` -> `users.id` |
+| `staff_profiles` | Staff-only profile data | `user_id` -> `users.id` |
+
+### Customer data
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `addresses` | Saved shipping and billing addresses | `user_id` -> `users.id` |
+| `customer_consents` | Marketing and consent history | Optional `user_id` -> `users.id` |
+| `carts` | Active shopping carts | Optional `user_id` -> `users.id` |
+| `cart_items` | Items in a cart | `cart_id` -> `carts.id`, `variant_id` -> `product_variants.id` |
+
+### Catalogue and content
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `products` | Product master record | Parent of `product_variants`, `product_media`, `product_categories`, `product_tags`, `collection_products` |
+| `product_variants` | Variant-level SKU and pricing | `product_id` -> `products.id` |
+| `product_options` | Option groups like size or colour | `product_id` -> `products.id` |
+| `product_option_values` | Values inside an option group | `option_id` -> `product_options.id` |
+| `variant_option_values` | Variant-to-option-value mapping | `variant_id` -> `product_variants.id`, `option_value_id` -> `product_option_values.id` |
+| `product_media` | Product media placement | `product_id` -> `products.id`, optional `variant_id` -> `product_variants.id`, `media_asset_id` -> `media_assets.id` |
+| `media_assets` | Stored media metadata | Referenced by `product_media`, `collections`, `banners` |
+| `categories` | Catalogue categories | Self-relation through `parent_id` |
+| `product_categories` | Product-category join table | `product_id` -> `products.id`, `category_id` -> `categories.id` |
+| `tags` | Normalised tag names | Linked to `products` through `product_tags` |
+| `product_tags` | Product-tag join table | `product_id` -> `products.id`, `tag_id` -> `tags.id` |
+| `collections` | Drops, launches, and curated collections | Linked to `products` through `collection_products` |
+| `collection_products` | Collection-product join table | `collection_id` -> `collections.id`, `product_id` -> `products.id` |
+| `content_pages` | CMS pages | Versioned by `content_revisions` |
+| `content_revisions` | Historical page revisions | `content_page_id` -> `content_pages.id` |
+| `homepage_sections` | Homepage blocks and modules | Often references media/assets and store settings |
+| `banners` | Promotional banner records | May reference `media_assets` |
+
+### Inventory and fulfilment
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `inventory_locations` | Warehouses or stock locations | Parent of `inventory_levels` and `inventory_movements` |
+| `inventory_levels` | Current stock by variant and location | `variant_id` -> `product_variants.id`, `location_id` -> `inventory_locations.id` |
+| `inventory_movements` | Immutable stock movement log | `variant_id` -> `product_variants.id`, `location_id` -> `inventory_locations.id` |
+| `inventory_reservations` | Reserved stock for carts or orders | `variant_id` -> `product_variants.id`, optional `order_id` -> `orders.id`, optional `cart_id` -> `carts.id` |
+| `shipments` | Shipment headers | `order_id` -> `orders.id` |
+| `shipment_items` | Shipment line items | `shipment_id` -> `shipments.id`, `order_item_id` -> `order_items.id` |
+| `shipment_events` | Shipment tracking history | `shipment_id` -> `shipments.id` |
+
+### Orders, payment, and returns
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `orders` | Order header and totals | `user_id` -> `users.id` when registered customer exists |
+| `order_items` | Snapshotted purchased items | `order_id` -> `orders.id`, optional `product_id` -> `products.id`, optional `variant_id` -> `product_variants.id` |
+| `order_addresses` | Snapshotted shipping/billing addresses | `order_id` -> `orders.id` |
+| `order_status_events` | Order status history | `order_id` -> `orders.id` |
+| `payments` | Payment attempts and status | `order_id` -> `orders.id` |
+| `payment_events` | Webhook and provider event log | Optional `payment_id` -> `payments.id` |
+| `refunds` | Refund attempts | `payment_id` -> `payments.id`, optional `order_id` -> `orders.id` |
+| `return_requests` | Customer return cases | `order_id` -> `orders.id`, optional `user_id` -> `users.id` |
+| `return_items` | Items inside a return request | `return_request_id` -> `return_requests.id`, `order_item_id` -> `order_items.id` |
+
+### Promotions, settings, and audit
+
+| Table | Purpose | Key relations |
+| --- | --- | --- |
+| `coupons` | Discount code definitions | Referenced by `coupon_usages` |
+| `coupon_usages` | Coupon redemption records | `coupon_id` -> `coupons.id`, `order_id` -> `orders.id`, optional `user_id` -> `users.id` |
+| `store_settings` | Store-level configuration | Used by API and admin UI |
+| `audit_logs` | Append-only audit trail | Optional `actor_user_id` -> `users.id` |
+| `notifications` | Outbound notification records | May reference users or orders |
+| `background_jobs` / `outbox_events` | Durable async work queue | Used for emails, webhooks, and retries |
+| `integration_configurations` | Provider configuration metadata | Used by payment, shipping, email, and media providers |
+
+### Main relationship map
+
+| Parent | Child |
+| --- | --- |
+| `users` | `customer_profiles`, `addresses`, `carts`, `orders`, `audit_logs` |
+| `roles` | `user_roles` |
+| `products` | `product_variants`, `product_media`, `product_categories`, `product_tags`, `collection_products` |
+| `product_variants` | `cart_items`, `order_items`, `inventory_levels`, `inventory_movements`, `inventory_reservations` |
+| `carts` | `cart_items` |
+| `orders` | `order_items`, `order_addresses`, `payments`, `shipments`, `return_requests`, `order_status_events` |
+| `payments` | `payment_events`, `refunds` |
+| `return_requests` | `return_items` |
+| `collections` | `collection_products` |
