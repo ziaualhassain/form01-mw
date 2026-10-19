@@ -153,6 +153,8 @@ async def update_order_status(db: AsyncSession, order: Order, to_status: str, me
     normalized_status = to_status.upper()
     if normalized_status not in ORDER_STATUSES:
         raise ValueError(f"Unsupported order status: {to_status}")
+    if normalized_status in {"FULFILLED", "DELIVERED"}:
+        order.fulfilment_status = "FULFILLED"
     if normalized_status == order.status:
         return order
     await add_order_status_event(db, order, to_status=normalized_status, message=message, actor_type="ADMIN", actor_user_id=actor_user_id, is_customer_visible=is_customer_visible)

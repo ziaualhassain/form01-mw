@@ -8,8 +8,53 @@ FastAPI-based commerce middleware for the FORM/01 storefront and admin UI.
 - PostgreSQL-backed SQLAlchemy models
 - JWT authentication scaffold
 - Public catalogue, cart, checkout, and admin product routes
+- `POST /api/v1/cart/items` sets the absolute quantity for a variant (1–100).
+  `DELETE /api/v1/cart/items/{item_id}` removes an item from the authenticated
+  customer's active cart, returning 204 or 404 if it is not in that cart.
 - Aiven-friendly configuration via environment variables
 - Alembic migration entrypoint
+
+## Order status updates
+
+`PATCH /api/v1/admin/orders/{order_number}/status` commits the order's `status`
+and its status event to the database. Customer list/detail endpoints expose that
+same `status`, separately from `payment_status`, `fulfilment_status`, and
+individual shipment statuses. The event's `is_customer_visible` flag controls
+event visibility, not whether the current order status is returned.
+
+Marking an order `FULFILLED` or `DELIVERED` also sets its `fulfilment_status`
+to `FULFILLED`. Re-saving either status repairs older inconsistent records
+without creating a duplicate status event. This does not create a shipment,
+mark a payment paid, or infer delivery from fulfilment.
+
+Run the focused regression tests with:
+`python -m unittest discover -s tests -p test_order_status.py -v`.
+
+## Public policies
+
+- `GET /api/v1/policies` lists the six policy slugs, titles, and publication status.
+- `GET /api/v1/policies/{slug}` returns `slug`, `title`, `published`,
+  `last_updated`, and `content_markdown` for an approved document.
+- Unapproved policies return **409**, unknown slugs **404**, and an unreadable
+  or invalid approved source **503**. These endpoints are public and need no
+  account or database connection.
+
+The source is `FORM01_Ecommerce_Policy_Pack.md`. It remains an unpublished draft:
+no draft body or placeholder text is exposed by the API. Finalize the legal and
+operational details, remove drafting instructions, replace all placeholders,
+set the last-updated date, and obtain approval before publication.
+
+After approval, set `POLICY_PACK_APPROVED_SHA256` to the exact SHA-256 digest of
+the finalized UTF-8 file (`shasum -a 256 FORM01_Ecommerce_Policy_Pack.md`) and
+restart the middleware. Leave it unset to withhold all policies. Any subsequent
+file change automatically withholds the pack until its new digest is approved;
+matching the digest alone does not bypass unresolved-placeholder validation.
+Keep the policy pack beside `app/` in deployments; the wheel includes it there.
+This approval covers the whole pack, not individual sections.
+
+The storefront footer links these six policy pages; Contact us and Grievance
+redressal use the same contact/grievance document. Finalization is a content/legal
+approval step, not a migration or a customer-facing write endpoint.
 
 ## Environment
 
@@ -85,6 +130,7 @@ All frontend clients should use the versioned API under `/api/v1`. Public endpoi
 | `GET` | `/api/v1/products` | List public products |
 | `GET` | `/api/v1/products/{slug}` | Get product detail by slug |
 | `GET` | `/api/v1/storefront/config` | Get public storefront config |
+| `GET` | `/api/v1/storefront/home` | Get the published, ordered homepage story and resolved product sections |
 
 ### Authentication endpoints
 
@@ -126,6 +172,48 @@ Catalogue variants expose `on_hand`, `reserved`, and `available`. Cart and check
 | `POST` | `/api/v1/admin/orders/{order_number}/shipments` | Create a shipment |
 | `POST` | `/api/v1/admin/payments/{payment_id}/refund` | Create a refund |
 | `POST` | `/api/v1/admin/inventory/adjust` | Add or remove stock for a variant |
+| `GET` | `/api/v1/admin/homepage` | Review homepage sections and scheduling |
+| `PUT` | `/api/v1/admin/homepage` | Replace the ordered homepage content configuration |
+
+### Homepage content model
+
+The homepage is a shared, backend-owned composition for web, mobile, and app clients. Use `GET /api/v1/storefront/home` for one stable response containing ordered sections such as `hero`, `editorial`, `product_collection`, `statement`, and `announcement`. Product collection sections resolve current active product data; they do not duplicate prices or inventory.
+
+Admin content can be replaced with a JSON array through `PUT /api/v1/admin/homepage`:
+
+```json
+[
+	{
+		"section_key": "hero-est-01",
+		"section_type": "hero",
+		"position": 1,
+		"enabled": true,
+		"content": {
+			"eyebrow": "FORM/01 — EST. 01",
+			"title": "Built beyond trends.",
+			"subtitle": "A more thoughtful tomorrow.",
+			"image": {
+				"desktop_url": "https://cdn.example.com/est01-hero.webp",
+				"mobile_url": "https://cdn.example.com/est01-hero-mobile.webp",
+				"alt": "FORM/01 EST. 01 hoodie in a minimal studio"
+			},
+			"cta": { "label": "Explore the first form", "href": "/products" },
+			"overlay": "dark"
+		}
+	},
+	{
+		"section_key": "featured-products",
+		"section_type": "product_collection",
+		"position": 2,
+		"enabled": true,
+		"content": {
+			"title": "The first form.",
+			"product_limit": 4,
+			"product_slugs": ["utility-shell", "signal-knit-02"]
+		}
+	}
+]
+```
 
 ### Webhook endpoints
 

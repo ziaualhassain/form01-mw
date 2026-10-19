@@ -23,6 +23,8 @@ async def create_product(
     image_url: str | None,
     image_urls: list[str],
     features: list[str],
+    gender: str | None,
+    theme: str | None,
     product_type: str | None,
     seo_title: str | None,
     seo_description: str | None,
@@ -66,6 +68,8 @@ async def create_product(
         image_url=primary_image_url,
         image_urls=normalized_image_urls,
         features=[feature.strip() for feature in features if feature.strip()],
+        gender=gender,
+        theme=theme,
         product_type=product_type,
         seo_title=seo_title,
         seo_description=seo_description,
@@ -129,7 +133,7 @@ async def update_product(db: AsyncSession, product_id, **changes) -> Product:
         if existing.scalar_one_or_none() is not None:
             raise ValueError(f"A product with slug '{slug}' already exists")
 
-    for field in ("title", "slug", "description", "product_type"):
+    for field in ("title", "slug", "description", "product_type", "gender", "theme"):
         if changes.get(field) is not None:
             setattr(product, field, changes[field])
     if changes.get("features") is not None:

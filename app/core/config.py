@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="FORM/01 Middleware")
     environment: str = Field(default="development")
+    policy_pack_approved_sha256: str | None = Field(default=None, alias="POLICY_PACK_APPROVED_SHA256")
     secret_key: str = Field(default="change-me-in-production")
     access_token_expire_minutes: int = Field(default=60 * 24)
     pending_payment_timeout_minutes: int = Field(default=15, alias="PENDING_PAYMENT_TIMEOUT_MINUTES")

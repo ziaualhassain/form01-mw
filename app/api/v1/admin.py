@@ -8,14 +8,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import Principal, require_admin
 from app.db.session import get_db
-from app.schemas import InventoryAdjustRequest, ProductCreate, ProductRead, ProductUpdate, OrderRead, OrderStatusUpdateRequest, ShipmentCreateRequest, RefundCreateRequest, VariantRead
+from app.schemas import HomepageSectionRead, HomepageSectionWrite, InventoryAdjustRequest, ProductCreate, ProductRead, ProductUpdate, OrderRead, OrderStatusUpdateRequest, ShipmentCreateRequest, RefundCreateRequest, VariantRead
 from app.services.orders import expire_pending_payments, get_admin_order, get_admin_orders, serialize_order, create_shipment, create_refund, update_order_status, validate_refund
 from app.services.admin import create_product, delete_product, list_admin_products, publish_product, unpublish_product, update_product
 from app.services.payments import create_razorpay_refund
 from app.services.inventory import adjust_stock
+from app.services.homepage import get_admin_homepage, replace_homepage_sections
 
 
 router = APIRouter()
+
+
+@router.get("/homepage", response_model=list[HomepageSectionRead])
+async def admin_homepage(principal: Annotated[Principal, Depends(require_admin)], db: AsyncSession = Depends(get_db)):
+    sections = await get_admin_homepage(db)
+    return [HomepageSectionRead(id=section.id, section_key=section.section_key, section_type=section.section_type, position=section.position, enabled=section.enabled, content=section.content_json, publish_at=section.publish_at, unpublish_at=section.unpublish_at) for section in sections]
+
+
+@router.put("/homepage", response_model=list[HomepageSectionRead])
+async def admin_replace_homepage(payload: list[HomepageSectionWrite], principal: Annotated[Principal, Depends(require_admin)], db: AsyncSession = Depends(get_db)):
+    try:
+        sections = await replace_homepage_sections(db, [item.model_dump() for item in payload], principal.user_id)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return [HomepageSectionRead(id=section.id, section_key=section.section_key, section_type=section.section_type, position=section.position, enabled=section.enabled, content=section.content_json, publish_at=section.publish_at, unpublish_at=section.unpublish_at) for section in sections]
 
 
 @router.post("/payments/expire-pending")
@@ -41,7 +58,7 @@ async def admin_products(principal: Annotated[Principal, Depends(require_admin)]
     items = await list_admin_products(db)
     from app.services.inventory import list_variant_inventory
     inventory = await list_variant_inventory(db, [item.id for item in items])
-    return [ProductRead(id=item.id, title=item.title, slug=item.slug, description=item.description, image_url=item.image_url, image_urls=item.image_urls, features=item.features, status=item.status, variants=[VariantRead(**variant) for variant in inventory.get(item.id, [])]) for item in items]
+    return [ProductRead(id=item.id, title=item.title, slug=item.slug, description=item.description, image_url=item.image_url, image_urls=item.image_urls, features=item.features, gender=item.gender, theme=item.theme, product_type=item.product_type, status=item.status, variants=[VariantRead(**variant) for variant in inventory.get(item.id, [])]) for item in items]
 
 
 @router.post("/products", response_model=ProductRead, status_code=201)
@@ -56,7 +73,7 @@ async def admin_create_product(payload: ProductCreate, principal: Annotated[Prin
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Product slug or variant SKU already exists") from exc
     from app.services.inventory import list_variant_inventory
     inventory = await list_variant_inventory(db, [product.id])
-    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, status=product.status, variants=[VariantRead(**variant) for variant in inventory.get(product.id, [])])
+    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, gender=product.gender, theme=product.theme, product_type=product.product_type, status=product.status, variants=[VariantRead(**variant) for variant in inventory.get(product.id, [])])
 
 
 @router.patch("/products/{product_id}", response_model=ProductRead)
@@ -71,7 +88,7 @@ async def admin_update_product(product_id: str, payload: ProductUpdate, principa
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Product slug or variant SKU already exists") from exc
     from app.services.inventory import list_variant_inventory
     inventory = await list_variant_inventory(db, [product.id])
-    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, status=product.status, variants=[VariantRead(**variant) for variant in inventory.get(product.id, [])])
+    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, gender=product.gender, theme=product.theme, product_type=product.product_type, status=product.status, variants=[VariantRead(**variant) for variant in inventory.get(product.id, [])])
 
 
 @router.post("/products/{product_id}/publish", response_model=ProductRead)
@@ -80,7 +97,7 @@ async def admin_publish_product(product_id: str, principal: Annotated[Principal,
         product = await publish_product(db, product_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, status=product.status)
+    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, gender=product.gender, theme=product.theme, product_type=product.product_type, status=product.status)
 
 
 @router.post("/products/{product_id}/unpublish", response_model=ProductRead)
@@ -89,7 +106,7 @@ async def admin_unpublish_product(product_id: str, principal: Annotated[Principa
         product = await unpublish_product(db, product_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, status=product.status)
+    return ProductRead(id=product.id, title=product.title, slug=product.slug, description=product.description, image_url=product.image_url, image_urls=product.image_urls, features=product.features, gender=product.gender, theme=product.theme, product_type=product.product_type, status=product.status)
 
 
 @router.delete("/products/{product_id}", status_code=204)

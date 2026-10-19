@@ -86,6 +86,9 @@ class ProductRead(BaseModel):
     image_url: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     features: list[str] = Field(default_factory=list)
+    gender: str | None = None
+    theme: str | None = None
+    product_type: str | None = None
     status: str
     variants: list["VariantRead"] = Field(default_factory=list)
 
@@ -97,6 +100,8 @@ class ProductCreate(BaseModel):
     image_url: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     features: list[str] = Field(default_factory=list)
+    gender: str | None = None
+    theme: str | None = None
     product_type: str | None = None
     seo_title: str | None = None
     seo_description: str | None = None
@@ -121,6 +126,8 @@ class ProductUpdate(BaseModel):
     description: str | None = None
     image_urls: list[str] | None = None
     features: list[str] | None = None
+    gender: str | None = None
+    theme: str | None = None
     product_type: str | None = None
     sku: str | None = None
     price_minor: int | None = Field(default=None, ge=0)
@@ -223,6 +230,28 @@ class StorefrontConfig(BaseModel):
     app_name: str
     environment: str
     currency: str = "INR"
+
+
+class HomepageSectionWrite(BaseModel):
+    section_key: str = Field(min_length=1, max_length=120)
+    section_type: str = Field(min_length=1, max_length=50)
+    position: int = Field(default=0, ge=0)
+    enabled: bool = True
+    content: dict = Field(default_factory=dict)
+    publish_at: datetime | None = None
+    unpublish_at: datetime | None = None
+
+
+class HomepageSectionRead(HomepageSectionWrite):
+    id: UUID
+
+
+class HomepageResponse(BaseModel):
+    schema_version: int = 1
+    page: str = "home"
+    brand: dict
+    announcement: dict | None = None
+    sections: list[dict] = Field(default_factory=list)
 
 
 class OrderItemRead(BaseModel):

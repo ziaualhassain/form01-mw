@@ -65,6 +65,21 @@ class WishlistItem(Base, TimeStampedMixin):
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), index=True)
 
 
+class HomepageSection(Base, TimeStampedMixin):
+    __tablename__ = "homepage_sections"
+    __table_args__ = (UniqueConstraint("section_key", name="uq_homepage_section_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    section_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    section_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unpublish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class Address(Base, TimeStampedMixin):
     __tablename__ = "addresses"
 
@@ -95,6 +110,8 @@ class Product(Base, TimeStampedMixin):
     image_url: Mapped[str | None] = mapped_column(String(500))
     image_urls: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     features: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    gender: Mapped[str | None] = mapped_column(String(30))
+    theme: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(50), default="DRAFT", nullable=False)
     product_type: Mapped[str | None] = mapped_column(String(100))
     seo_title: Mapped[str | None] = mapped_column(String(255))

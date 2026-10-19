@@ -9,12 +9,14 @@ from app.api.v1.checkout import router as checkout_router
 from app.api.v1.customer import router as customer_router
 from app.api.v1.orders import router as orders_router
 from app.api.v1.payments import router as payments_router
+from app.api.v1.policies import router as policies_router
 from app.api.v1.public_catalogue import router as public_router
 from app.api.v1.webhooks import router as webhooks_router
 
 
 router = APIRouter()
 router.include_router(public_router, tags=["public"])
+router.include_router(policies_router, tags=["public"])
 router.include_router(auth_router, prefix="/auth", tags=["auth"])
 router.include_router(customer_router, tags=["customer"])
 router.include_router(orders_router, tags=["orders"])
