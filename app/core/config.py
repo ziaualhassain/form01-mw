@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     pending_payment_timeout_minutes: int = Field(default=15, alias="PENDING_PAYMENT_TIMEOUT_MINUTES")
     payment_expiry_interval_seconds: int = Field(default=60, alias="PAYMENT_EXPIRY_INTERVAL_SECONDS")
     password_hash_scheme: str = Field(default="pbkdf2_sha256", alias="PASSWORD_HASH_SCHEME")
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000", "http://localhost:3001"])
+    cors_origins: list[str] = Field(default_factory=lambda: [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://form01-admin.vercel.app",
+        "https://form01-store-xi.vercel.app",
+    ])
     razorpay_key_id: str | None = Field(default=None, alias="RAZORPAY_KEY_ID")
     razorpay_key_secret: str | None = Field(default=None, alias="RAZORPAY_KEY_SECRET")
     razorpay_webhook_secret: str | None = Field(default=None, alias="RAZORPAY_WEBHOOK_SECRET")

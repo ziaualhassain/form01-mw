@@ -76,6 +76,16 @@ Recommended app variables:
 - `RAZORPAY_KEY_SECRET`
 - `RAZORPAY_WEBHOOK_SECRET`
 
+Default CORS origins include local ports 3000/3001 and the deployed admin/store:
+`https://form01-admin.vercel.app` and `https://form01-store-xi.vercel.app`.
+An explicit `CORS_ORIGINS` environment variable replaces those defaults.
+For Render, set it to the following JSON array (without trailing slashes) and
+redeploy:
+
+```json
+["https://form01-admin.vercel.app","https://form01-store-xi.vercel.app"]
+```
+
 ## Run locally
 
 1. Create and activate a Python virtual environment.
