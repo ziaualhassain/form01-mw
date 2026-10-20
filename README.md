@@ -14,6 +14,184 @@ FastAPI-based commerce middleware for the FORM/01 storefront and admin UI.
 - Aiven-friendly configuration via environment variables
 - Alembic migration entrypoint
 
+## Admin time-based order queue
+
+`GET /api/v1/admin/order-queue` is ADMIN/OWNER-only and private/no-store.
+The older `GET /admin/orders` list remains backward-compatible for recent-order
+dashboard consumers; the live Orders screen now uses this new queue:
+
+- `period=today|7d|30d|all|custom` (default Today, Asia/Kolkata calendar dates).
+- Custom `date_from` / `date_to` are inclusive ISO dates, 1970–9998, both required.
+  Non-custom ranges reject date arguments. 7/30 days include today.
+- Optional `q` (up to 150 characters) searches order reference/product snapshots,
+  case-insensitively with literal wildcard characters.
+- `stage` (including `incoming` for RECEIVED/CONFIRMED), `payment` and `fulfilment`
+  accept the UI's enumerated statuses, defaulting to `all`.
+- `limit=20` (1–100), `offset=0` (0–1,000,000), optional aware `snapshot_at`.
+
+Responses contain `items`, `total`, `limit`, `offset`, `snapshot_at`, `new_orders`,
+`server_today`, `range_start` and `range_end`. Summary rows include statuses,
+currency/total, dates, first product and total item quantity. Full order details
+remain at `GET /admin/orders/{order_number}`. Search/status/date filtering happens
+before pagination, and related item summaries are batched, not per-order queries.
+
+Sort is placed time (creation fallback), then creation time and ID descending.
+Reusing the returned snapshot excludes later-created arrivals from pagination and
+counts them in `new_orders` instead. Poll this same page/snapshot every 15 seconds
+and compare its rows/count to announce changes without replacing the visible page.
+Omit the snapshot to refresh; relative date windows are anchored to the snapshot,
+and `server_today` lets the UI detect an IST midnight rollover. This cutoff is not
+a transactional database snapshot: status/placed-time changes and delayed commits
+can change membership, so refresh the queue after operational changes.
+
+No migration is needed. Isolated date-boundary, >50-order, auth and arrival tests:
+`python -m unittest discover -s tests -p test_admin_order_queue.py -v`.
+
+## Admin customer directory
+
+ADMIN/OWNER-only, read-only endpoints:
+
+- `GET /api/v1/admin/customers?q=&limit=20&offset=0`
+- `GET /api/v1/admin/customers/{customer_id}`
+- `GET /api/v1/admin/customers/{customer_id}/orders?limit=20&offset=0`
+
+List responses contain `items`, `total`, `limit`, and `offset`. The page size
+is 1–100 (default 20), with nonnegative offsets up to 1,000,000. Search is
+case-insensitive across email, profile names, full name and profile phone;
+wildcard characters are treated literally. Results have a stable newest-first
+creation-date/ID order. No extra database migration is required.
+
+The directory includes non-staff registered users even without profiles/orders.
+Users with ADMIN or OWNER roles are excluded from all three routes. Profiles
+expose only account/contact fields, verification/sign-in dates and order
+statistics—not password hashes, tokens, roles or payment credentials. Responses
+are private/no-store. Unknown/staff IDs return 404, invalid query/UUIDs 422;
+unauthenticated/non-admin requests return 401/403.
+
+Order history is scoped strictly by `Order.user_id`, never matched by contact
+email, and paginates all statuses (including pending/refunded), not just the
+latest 50 orders. Counts are total orders and orders whose current payment status
+is PAID, not lifetime spend or net revenue. Guest checkout records without a
+registered user are not customer accounts.
+
+Focused tests use an isolated in-memory SQLite database:
+`python -m unittest discover -s tests -p test_admin_customers.py -v`.
+
+## Draft GST settings and draft order PDFs
+
+Migration `c0d3456e7f88` adds immutable GST configuration versions and nullable
+order document snapshots. Install the updated project dependencies (including
+ReportLab), then run `alembic upgrade head` on the approved target database
+before starting this middleware version. Deploy admin/store afterward.
+
+This is deliberately **draft only**: registration is unknown, no GST rates are
+seeded, prices are planned as GST-exclusive, and GST collection remains disabled.
+The API rejects attempts to activate collection. Seller defaults are Shaik Ziaual
+Hassain, Telangana state code 36; address and GSTIN are unconfirmed. An accountant
+must verify registration, classifications, current law, place-of-supply rules
+and legal numbering before a separate activation implementation is approved.
+The Razorpay article is only an editable research citation, not a legal authority.
+
+- ADMIN/OWNER: `GET` / `PUT /api/v1/admin/gst`. Each PUT appends a version.
+- ADMIN/OWNER: `POST /api/v1/admin/gst/preview`. Simulates editor-supplied draft
+  settings without saving or changing checkout.
+- ADMIN/OWNER: `GET /api/v1/admin/orders/{order_number}/draft-invoice`.
+- Customer owner: `GET /api/v1/me/orders/{order_number}/draft-invoice`.
+
+Rules match normalized product types and hold an HSN, inclusive start date,
+exclusive optional end date, and ordered per-unit slabs with inclusive upper
+bounds. The final slab is unlimited. Rates use integer basis points (500 = 5%),
+amounts use integer paise. Same-type effective windows cannot overlap. The
+simulation allocates discounts proportionally using largest remainders, applies
+the configured before/after-discount threshold basis, and rounds each line tax
+half up to paise. It shows CGST/SGST for same-state domestic examples and IGST
+otherwise; odd local paise goes to SGST in this illustrative model. It does not
+support UTGST, exports or special place-of-supply cases. Missing rules are errors,
+not silent zero-tax defaults.
+
+New orders snapshot seller details, configuration version, delivery address,
+item prices and actual totals at checkout. Later edits never rewrite those
+snapshots. Draft rules are not used to charge taxes or label zero-rated goods.
+After confirmed payment (also after refunds), both interfaces offer an
+authenticated PDF marked **DRAFT - NOT A TAX INVOICE on every page**. These
+documents are not receipts, legal invoices, refund statements or credit notes;
+no legal invoice number, IRN, GST filing or email is generated. Old orders
+without a snapshot return 409 rather than inventing historical details.
+Downloads are private/no-store. The initial built-in PDF font supports WinAnsi
+text; unsupported scripts return an explicit 422 rather than replacing names.
+
+## Coupons and payment-confirmed cart cleanup
+
+Apply migration `a8b1234c5d66` with `alembic upgrade head` before deploying the
+updated API, then deploy admin/store. It adds coupons, usage reservations, and
+order cart snapshots. Existing orders have no cart snapshot and are not
+retroactively cleared.
+
+ADMIN/OWNER endpoints:
+
+- `GET /api/v1/admin/coupons`
+- `POST /api/v1/admin/coupons`
+- `PUT /api/v1/admin/coupons/{id}` (full rule replacement)
+- `DELETE /api/v1/admin/coupons/{id}` (archive, returns 204)
+
+Archiving hides the coupon from the admin list and blocks new use without
+deleting redemption or order history. Archived codes remain reserved and cannot
+be reused or edited; existing pending payments retain their discounted total.
+Repeated archive requests are safe. Migration `b9c2345d6e77` adds the archive
+timestamp; run `alembic upgrade head` before starting the updated middleware.
+An end date already blocks new use automatically at that instant; expiration
+does not delete/archive the record and requires no scheduled job.
+
+Example: 10% off, capped at INR 100, minimum subtotal INR 500:
+
+```json
+{
+  "code": "WELCOME10",
+  "discount_type": "PERCENTAGE",
+  "value": 10,
+  "max_discount_minor": 10000,
+  "min_subtotal_minor": 50000,
+  "starts_at": null,
+  "ends_at": null,
+  "usage_limit": 100,
+  "per_customer_limit": 1,
+  "enabled": true
+}
+```
+
+`FIXED` values and monetary fields are integer paise; percentage values are
+whole percentages (1-100). Dates require timezone offsets and the end is
+exclusive. Codes are case-insensitive and normalized to uppercase. One coupon
+applies to the entire product subtotal; offers cannot stack. Discounts round
+down to paise and are limited so at least INR 1 remains payable through Razorpay.
+Shipping/tax remain zero under the existing pricing rules.
+
+Authenticated quote and checkout requests accept optional `coupon_code`.
+The quote returns `coupon_code`, `discount_minor`, and the discounted
+`total_minor`. Checkout recalculates from database prices/rules, snapshots the
+code/discount on the order, and passes that total to Razorpay. Clients cannot
+supply discount amounts. A quote does not reserve usage.
+
+Checkout locks the coupon row before checking total/per-customer limits and
+reserving usage in the order transaction. Pending payments occupy usage slots.
+Payment verification and webhooks share idempotent completion: successful
+payment redeems the slot, consumes stock, and removes purchased quantities from
+the original cart item IDs. Later additions and removed/re-added lines are
+preserved. Failures, payment expiry, and order cancellation release reserved
+coupon uses and stock without clearing the cart. Refunded successful uses remain
+counted; disabling/editing a coupon does not change existing pending order totals.
+Closing Razorpay without paying leaves the pending reservation until expiry.
+Payments received after local failure/expiry require explicit reconciliation
+(409), not automatic re-use of released stock/coupon slots.
+
+Cart reads and quotes no longer silently delete/reduce items when stock changes,
+including stock held by a pending checkout. Availability is still returned;
+checkout stock reservation remains authoritative.
+
+Run `python -m unittest discover -s tests -v`. Coupon lifecycle tests use an
+isolated SQLite database and mocked provider calls, not the live database or
+Razorpay. PostgreSQL row-lock concurrency must also be exercised in staging.
+
 ## Order status updates
 
 `PATCH /api/v1/admin/orders/{order_number}/status` commits the order's `status`

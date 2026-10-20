@@ -58,7 +58,7 @@ async def provider_webhook(provider: str, request: Request):
         elif provider_payment_id:
             result = await db.execute(select(Payment).where(Payment.provider == provider, Payment.provider_payment_id == provider_payment_id))
             payment = result.scalar_one_or_none()
-        elif provider_order_id:
+        if payment is None and provider_order_id:
             result = await db.execute(select(Payment).where(Payment.provider == provider, Payment.provider_order_id == provider_order_id))
             payment = result.scalar_one_or_none()
         if payment and provider == "razorpay" and event_type.startswith("payment."):
@@ -74,14 +74,24 @@ async def provider_webhook(provider: str, request: Request):
             payload_json=body.decode("utf-8"),
             processing_status="RECEIVED",
         )
+        if payment is not None:
+            await db.refresh(payment, with_for_update=True)
+            duplicate = (await db.execute(select(PaymentEvent).where(PaymentEvent.provider == provider, PaymentEvent.provider_event_id == provider_event_id))).scalar_one_or_none()
+            if duplicate is not None:
+                return {"data": {"provider": provider, "received": True, "duplicate": True}, "meta": {"request_id": getattr(request.state, "request_id", None)}}
         db.add(event)
         if payment and event_type in {"payment.captured", "payment.succeeded", "payment_succeeded", "payment.authorized"}:
-            await mark_payment_captured(db, payment, provider_payment_id=provider_payment_id)
+            already_captured = payment.status == "CAPTURED"
+            try:
+                await mark_payment_captured(db, payment, provider_payment_id=provider_payment_id)
+            except ValueError as exc:
+                await db.rollback()
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             order_result = await db.execute(select(Order).where(Order.id == payment.order_id))
             order = order_result.scalar_one_or_none()
-            if order is not None:
+            if order is not None and not already_captured:
                 await add_order_status_event(db, order, to_status="CONFIRMED", message="Payment confirmed by webhook", actor_type="SYSTEM", is_customer_visible=True)
-        elif payment and event_type in {"payment.failed", "payment_failed"}:
+        elif payment and payment.status == "PENDING" and event_type in {"payment.failed", "payment_failed"}:
             failure_message = payment_entity.get("error_description") or payment_entity.get("error_reason")
             await mark_payment_failed(db, payment, failure_code=payment_entity.get("error_code"), failure_message=failure_message)
             order_result = await db.execute(select(Order).where(Order.id == payment.order_id))

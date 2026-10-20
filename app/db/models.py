@@ -217,6 +217,46 @@ class Order(Base, TimeStampedMixin):
     tax_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    coupon_code: Mapped[str | None] = mapped_column(String(40))
+    cart_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("carts.id", ondelete="SET NULL"))
+    cart_items_snapshot: Mapped[list | None] = mapped_column(JSON)
+    cart_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    draft_invoice_snapshot: Mapped[dict | None] = mapped_column(JSON)
+
+
+class GstConfiguration(Base, TimeStampedMixin):
+    __tablename__ = "gst_configurations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class Coupon(Base, TimeStampedMixin):
+    __tablename__ = "coupons"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    discount_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_discount_minor: Mapped[int | None] = mapped_column(Integer)
+    min_subtotal_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    usage_limit: Mapped[int | None] = mapped_column(Integer)
+    per_customer_limit: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CouponRedemption(Base, TimeStampedMixin):
+    __tablename__ = "coupon_redemptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    coupon_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("coupons.id"), index=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="RESERVED")
 
 
 class OrderStatusEvent(Base, TimeStampedMixin):

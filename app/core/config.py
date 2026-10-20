@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="FORM/01 Middleware")
     environment: str = Field(default="development")
+    gst_checkout_test_mode: bool = Field(default=False, alias="GST_CHECKOUT_TEST_MODE")
     policy_pack_approved_sha256: str | None = Field(default=None, alias="POLICY_PACK_APPROVED_SHA256")
     secret_key: str = Field(default="change-me-in-production")
     access_token_expire_minutes: int = Field(default=60 * 24)
@@ -43,6 +44,16 @@ class Settings(BaseSettings):
     postgres_user: str | None = Field(default=None, alias="POSTGRES_USER")
     postgres_password: str | None = Field(default=None, alias="POSTGRES_PASSWORD")
     postgres_sslmode: str = Field(default="require", alias="POSTGRES_SSLMODE")
+
+    @model_validator(mode="after")
+    def validate_gst_test_mode(self) -> Settings:
+        if self.gst_checkout_test_mode and (
+            self.environment != "development"
+            or not self.razorpay_configured
+            or not (self.razorpay_key_id or "").startswith("rzp_test_")
+        ):
+            raise ValueError("GST_CHECKOUT_TEST_MODE requires ENVIRONMENT=development and configured Razorpay Test keys")
+        return self
 
     @field_validator("cors_origins", mode="before")
     @classmethod

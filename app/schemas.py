@@ -198,9 +198,46 @@ class AddressRead(AddressCreate):
 class CheckoutQuoteRequest(BaseModel):
     shipping_address_id: UUID
     billing_address_id: UUID | None = None
+    coupon_code: str | None = Field(default=None, max_length=40)
+
+
+class GstTestLineRead(BaseModel):
+    cart_item_id: str
+    variant_id: str
+    sku: str
+    product_type: str
+    hsn: str
+    quantity: int
+    subtotal_minor: int
+    discount_minor: int
+    taxable_minor: int
+    rate_basis_points: int
+    tax_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+
+
+class GstTestRead(BaseModel):
+    draft_only: bool
+    configuration_version: int
+    destination_state_code: str
+    seller_state_code: str
+    on_date: str
+    notice: str
+    subtotal_minor: int
+    discount_minor: int
+    taxable_minor: int
+    tax_minor: int
+    total_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    lines: list[GstTestLineRead]
 
 
 class CheckoutQuoteResponse(BaseModel):
+    gst_test: GstTestRead | None = None
     currency: str
     subtotal_minor: int
     discount_minor: int
@@ -208,14 +245,17 @@ class CheckoutQuoteResponse(BaseModel):
     tax_minor: int
     total_minor: int
     items: list[CartItemRead]
+    coupon_code: str | None = None
 
 
 class CheckoutCreateRequest(CheckoutQuoteRequest):
+    gst_test_version: int | None = Field(default=None, ge=1)
     idempotency_key: str | None = None
     payment_provider: str | None = None
 
 
 class CheckoutCreateResponse(BaseModel):
+    gst_test: GstTestRead | None = None
     order_id: UUID
     order_number: str
     payment_status: str
@@ -307,6 +347,8 @@ class OrderAddressRead(BaseModel):
 
 
 class OrderRead(BaseModel):
+    gst_test: GstTestRead | None = None
+    draft_invoice_available: bool = False
     id: UUID
     order_number: str
     status: str
@@ -315,6 +357,7 @@ class OrderRead(BaseModel):
     currency: str
     subtotal_minor: int
     discount_minor: int
+    coupon_code: str | None = None
     shipping_minor: int
     tax_minor: int
     total_minor: int

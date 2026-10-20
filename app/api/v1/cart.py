@@ -10,7 +10,7 @@ from app.api.dependencies import CurrentPrincipal
 from app.db.models import CartItem, ProductVariant
 from app.db.session import get_db
 from app.schemas import CartItemCreate, CartItemRead, CartRead
-from app.services.cart import get_or_create_cart, list_cart_items, reconcile_cart_inventory, upsert_cart_item
+from app.services.cart import get_or_create_cart, list_cart_items, upsert_cart_item
 from app.services.inventory import get_available_quantities
 
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/cart", response_model=CartRead)
 async def get_cart(principal: CurrentPrincipal, db: AsyncSession = Depends(get_db)):
     cart = await get_or_create_cart(db, principal.user_id)
-    items = await reconcile_cart_inventory(db, cart.id)
+    items = await list_cart_items(db, cart.id)
     variant_ids = [item.variant_id for item in items]
     availability = await get_available_quantities(db, variant_ids)
     prices = {}

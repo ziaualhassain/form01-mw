@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Order, OrderAddress, OrderItem, OrderStatusEvent, Payment, Refund, Shipment, ShipmentItem
+from app.db.models import Cart, CartItem, Order, OrderAddress, OrderItem, OrderStatusEvent, Payment, Refund, Shipment, ShipmentItem
 from app.services.inventory import consume_order_reservations, release_order_reservations
+from app.services.coupons import finish_redemption
 
 ORDER_STATUSES = {"RECEIVED", "PROCESSING", "CONFIRMED", "PACKED", "SHIPPED", "DELIVERED", "FULFILLED", "CANCELLED", "PAYMENT_FAILED"}
 
@@ -119,6 +121,9 @@ async def serialize_order(db: AsyncSession, order: Order) -> dict:
         "currency": order.currency,
         "subtotal_minor": order.subtotal_minor,
         "discount_minor": order.discount_minor,
+        "coupon_code": order.coupon_code,
+        "gst_test": (order.draft_invoice_snapshot or {}).get("gst_test"),
+        "draft_invoice_available": order.draft_invoice_snapshot is not None and order.payment_status in {"PAID", "REFUNDED", "PARTIALLY_REFUNDED"},
         "shipping_minor": order.shipping_minor,
         "tax_minor": order.tax_minor,
         "total_minor": order.total_minor,
@@ -157,9 +162,13 @@ async def update_order_status(db: AsyncSession, order: Order, to_status: str, me
         order.fulfilment_status = "FULFILLED"
     if normalized_status == order.status:
         return order
-    await add_order_status_event(db, order, to_status=normalized_status, message=message, actor_type="ADMIN", actor_user_id=actor_user_id, is_customer_visible=is_customer_visible)
     if normalized_status == "CANCELLED":
+        pending = (await db.execute(select(Payment).where(Payment.order_id == order.id, Payment.status == "PENDING").with_for_update())).scalars().all()
+        for payment in pending:
+            await mark_payment_failed(db, payment, failure_code="ORDER_CANCELLED")
+        await finish_redemption(db, order.id, "RELEASED")
         await release_order_reservations(db, order.id, note="Order cancelled by admin")
+    await add_order_status_event(db, order, to_status=normalized_status, message=message, actor_type="ADMIN", actor_user_id=actor_user_id, is_customer_visible=is_customer_visible)
     return order
 
 
@@ -185,21 +194,44 @@ async def set_payment_provider_order_id(db: AsyncSession, payment: Payment, prov
 
 
 async def mark_payment_captured(db: AsyncSession, payment: Payment, provider_payment_id: str | None = None) -> Payment:
+    await db.refresh(payment, with_for_update=True)
+    if payment.status == "CAPTURED":
+        return payment
+    if payment.status != "PENDING":
+        raise ValueError("Payment is no longer pending; provider payment requires reconciliation")
+    result = await db.execute(select(Order).where(Order.id == payment.order_id).with_for_update())
+    order = result.scalar_one()
+    if order.status in {"CANCELLED", "PAYMENT_FAILED"}:
+        raise ValueError("Order is closed; provider payment requires reconciliation")
+    if order.cart_id is not None:
+        await db.execute(select(Cart).where(Cart.id == order.cart_id).with_for_update())
     payment.status = "CAPTURED"
     payment.provider_payment_id = provider_payment_id or payment.provider_payment_id
     payment.captured_at = datetime.now(timezone.utc)
+    await finish_redemption(db, order.id, "REDEEMED")
     await consume_order_reservations(db, payment.order_id)
-    result = await db.execute(select(Order).where(Order.id == payment.order_id))
-    order = result.scalar_one_or_none()
-    if order is not None:
-        order.payment_status = "PAID"
+    order.payment_status = "PAID"
+    if order.cart_id is not None and order.cart_cleared_at is None:
+        for snapshot in order.cart_items_snapshot or []:
+            item = (await db.execute(select(CartItem).where(
+                CartItem.id == UUID(snapshot["id"]), CartItem.cart_id == order.cart_id,
+            ).with_for_update())).scalar_one_or_none()
+            if item is not None:
+                item.quantity -= snapshot["quantity"]
+                if item.quantity <= 0:
+                    await db.delete(item)
+        order.cart_cleared_at = datetime.now(timezone.utc)
     return payment
 
 
 async def mark_payment_failed(db: AsyncSession, payment: Payment, failure_code: str | None = None, failure_message: str | None = None) -> Payment:
+    await db.refresh(payment, with_for_update=True)
+    if payment.status != "PENDING":
+        return payment
     payment.status = "FAILED"
     payment.failure_code = failure_code or payment.failure_code
     payment.failure_message = failure_message or payment.failure_message
+    await finish_redemption(db, payment.order_id, "RELEASED")
     await release_order_reservations(db, payment.order_id)
     result = await db.execute(select(Order).where(Order.id == payment.order_id))
     order = result.scalar_one_or_none()

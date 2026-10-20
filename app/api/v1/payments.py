@@ -22,7 +22,7 @@ async def verify_razorpay_payment(payload: RazorpayPaymentVerifyRequest, princip
             Payment.provider == "razorpay",
             Payment.provider_order_id == payload.razorpay_order_id,
             Order.user_id == principal.user_id,
-        )
+        ).with_for_update(of=Payment)
     )
     payment = result.scalar_one_or_none()
     if payment is None:
@@ -54,7 +54,11 @@ async def verify_razorpay_payment(payload: RazorpayPaymentVerifyRequest, princip
     if provider_payment.get("status") not in {"authorized", "captured"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Razorpay payment is not successful")
 
-    await mark_payment_captured(db, payment, provider_payment_id=payload.razorpay_payment_id)
+    try:
+        await mark_payment_captured(db, payment, provider_payment_id=payload.razorpay_payment_id)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     order_result = await db.execute(select(Order).where(Order.id == payment.order_id))
     order = order_result.scalar_one_or_none()
     if order is not None:

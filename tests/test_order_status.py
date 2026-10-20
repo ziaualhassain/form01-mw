@@ -44,7 +44,10 @@ class OrderStatusTests(unittest.IsolatedAsyncioTestCase):
         self.db.add.assert_not_called()
 
     async def test_cancellation_still_releases_stock_without_claiming_fulfilment(self):
-        with patch("app.services.orders.release_order_reservations", new_callable=AsyncMock) as release:
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        self.db.execute = AsyncMock(return_value=result)
+        with patch("app.services.orders.release_order_reservations", new_callable=AsyncMock) as release, patch("app.services.orders.finish_redemption", new_callable=AsyncMock):
             await update_order_status(self.db, self.order, "CANCELLED", None, self.actor)
         self.assertEqual(self.order.status, "CANCELLED")
         self.assertEqual(self.order.fulfilment_status, "UNFULFILLED")
